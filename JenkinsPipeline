@@ -1,0 +1,69 @@
+pipeline {
+agent any
+   parameters {
+    string defaultValue: 'TONY', name: 'name'
+    string defaultValue: 'ROBD_6.0.8.0_pipeline', name: 'BACKUP_DIR'
+    choice choices: ['CM_6.0.6.0', 'CM_6.0.7.0', 'CM_6.0.8.0'], name: 'version'
+    }
+    tools {
+        ant 'ANT 1.8.2'
+        git 'Default'
+    }
+    environment {
+        WS = "$env.WORKSPACE"
+        JN = "$env.JOB_NAME"
+    }
+    options {
+        ansiColor('xterm')
+    }
+    stages {
+        stage('Build') {
+            steps {
+                echo "Hello ${params.name}"
+                stash 'source'
+                git branch: 'master', credentialsId: 'gitblit', url: 'https://parthasarathi.p@172.16.28.141/r/Campaign_Management/campaign-management.git'
+                sh """
+                        #!/bin/bash
+                        echo "Hello ${params.name}"
+                        echo "version selected is ${params.version}"
+                        pwd
+                        cd $WORKSPACE
+                        pwd
+                        git checkout ${params.version}
+                        a=`git describe`
+                        echo "tagged version is \$a"
+                        JAVA_HOME="/usr/lib/jvm/adoptopenjdk-8-hotspot"
+                        export JAVA_HOME
+                        
+                        cd  $WORKSPACE/ROBD_DB/build
+                        ant
+                        if [ "\$?" == 0 ]
+                                then
+                                cp $WORKSPACE/ROBD_DB/lib/urm.jar $WORKSPACE/ROBD/WebContent/WEB-INF/lib/
+                                cd $WORKSPACE/ROBD/build
+                                ant
+                                cd  $WORKSPACE/ROBD_AST/build
+                                ant -f buildLatest.xml
+                                else
+                                    echo "URM not build succesfully "
+                            fi
+                        
+                        
+                """
+                archiveArtifacts artifacts: '**/ROBD.war', followSymlinks: false
+                stash 'source'
+            }
+        }
+        
+        stage('Deploy') {
+            agent {
+                label '231'
+            }
+            steps {
+                unstash 'source'
+                ansiblePlaybook colorized: true, extras: '--extra-vars \'@mysql_passkey.yml\'  -e \'{"backup_dir":"\$BACKUP_DIR","build_name":"\$JN"}\'', inventory: '/var/ansible/hosts', playbook: '/var/ansible/cmdeploy.yml', vaultCredentialsId: 'vaultpassfile'
+            }
+        }
+    }
+}
+
